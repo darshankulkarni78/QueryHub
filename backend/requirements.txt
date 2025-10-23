@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+alembic
+python-dotenv
+qdrant-client
+sentence-transformers
+torch
+transformers
+requests
+python-multipart
+python-docx
+PyPDF2
+supabase
+openai
