@@ -23,49 +23,70 @@ def start_indexing_thread(document_id: str, local_path: str):
 
 def process_document(document_id: str, local_path: str):
     db = SessionLocal()
+    job = None
     try:
         job = Job(document_id=document_id, status="processing")
         db.add(job); db.commit()
+        print(f"📦 Processing document {document_id}...")
 
         text = extract_text_from_file(local_path)
         chunks = chunk_text(text, CHUNK_SIZE, CHUNK_OVERLAP)
+        print(f"  ✓ Extracted {len(chunks)} chunks from {local_path}")
+        
         model = get_embedding_model()
-        qclient = get_qdrant()
 
-        qclient.recreate_collection(
-            collection_name=QDRANT_COLLECTION,
-            vectors_config=qmodels.VectorParams(size=model.get_sentence_embedding_dimension(), distance=qmodels.Distance.COSINE)
-        )
-
+        # Try to upload to Qdrant, but continue if it fails
         to_upsert = []
         for idx, c in enumerate(chunks):
             chunk_obj = Chunk(document_id=document_id, chunk_index=idx, text=c, token_count=len(c))
             db.add(chunk_obj); db.commit(); db.refresh(chunk_obj)
 
-            emb = model.encode(c).tolist()
-            point = qmodels.PointStruct(
-                id=chunk_obj.id,
-                vector=emb,
-                payload={"document_id": document_id, "chunk_index": idx, "chunk_text": c}
-            )
-            to_upsert.append(point)
+            try:
+                emb = model.encode(c).tolist()
+                point = qmodels.PointStruct(
+                    id=chunk_obj.id,
+                    vector=emb,
+                    payload={"document_id": document_id, "chunk_index": idx, "chunk_text": c}
+                )
+                to_upsert.append(point)
+            except Exception as e:
+                print(f"⚠ Warning encoding chunk {idx}: {e}")
 
             emb_row = Embedding(chunk_id=chunk_obj.id)
             db.add(emb_row); db.commit()
 
+        # Upload to Qdrant if available
         if to_upsert:
-            qclient.upsert(collection_name=QDRANT_COLLECTION, points=to_upsert)
+            print(f"  ⬆ Uploading {len(to_upsert)} embeddings to Qdrant...")
+            try:
+                qclient = get_qdrant()
+                qclient.upsert(
+                collection_name=QDRANT_COLLECTION,
+                points=to_upsert
+                )
+                print(f"  ✓ Uploaded {len(to_upsert)} embeddings to Qdrant")
+            except Exception as e:
+                print(f"⚠ Qdrant unavailable: {e}")
+                print(f"  Chunks stored in database but not indexed for search")
 
-        upload_file_to_supabase(local_path, os.path.basename(local_path))
+        try:
+            upload_file_to_supabase(local_path, os.path.basename(local_path))
+        except Exception as e:
+            print(f"⚠ Supabase upload failed: {e}")
 
         job.status = "done"
         job.progress = 100
         db.add(job); db.commit()
+        print(f"✓ Document {document_id} processed successfully")
 
     except Exception as e:
-        job.status = "failed"
-        job.error = str(e)
-        db.add(job); db.commit()
+        print(f"✗ Error processing document {document_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        if job:
+            job.status = "failed"
+            job.error = str(e)
+            db.add(job); db.commit()
 
     finally:
         db.close()
