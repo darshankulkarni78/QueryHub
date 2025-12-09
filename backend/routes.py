@@ -21,7 +21,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-Base.metadata.create_all(bind=engine)
+@app.on_event("startup")
+def init_db():
+    """Initialize database tables on app startup."""
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("✓ Database tables initialized")
+    except Exception as e:
+        print(f"⚠ Warning: Could not initialize database: {e}")
+        print("  The app will continue, but database operations may fail.")
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
@@ -98,6 +106,11 @@ async def generate_answer(prompt: str, context_texts: list) -> str:
         resp.raise_for_status()
         result = resp.json()
     return result["choices"][0]["message"]["content"]
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint to verify app is running."""
+    return {"status": "ok", "message": "QueryHub backend is running"}
 
 @app.post("/ask")
 async def ask_question(payload: dict):
