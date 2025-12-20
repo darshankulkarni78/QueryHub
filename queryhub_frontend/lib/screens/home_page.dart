@@ -15,13 +15,27 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final Set<String> _expandedDocuments = {}; // Track which documents are expanded
 
   @override
   void initState() {
     super.initState();
-    Future.microtask(() {
+    Future.microtask(() async {
       final app = context.read<AppState>();
-      app.loadDocuments();
+      await app.loadDocuments();
+      // Auto-select and expand first ready document if none selected
+      if (app.selectedDocumentId == null && app.documents.isNotEmpty) {
+        final readyDocs = app.documents.where((d) => d.isReady).toList();
+        if (readyDocs.isNotEmpty) {
+          final firstDoc = readyDocs.first;
+          setState(() {
+            _expandedDocuments.add(firstDoc.id);
+          });
+          app.selectDocument(firstDoc.id);
+        }
+      }
+      // Load all chat sessions
+      await app.loadChatSessions();
     });
   }
 
@@ -31,6 +45,7 @@ class _HomePageState extends State<HomePage> {
     _scrollController.dispose();
     super.dispose();
   }
+
 
   Future<void> _pickAndUpload(AppState app) async {
     try {
@@ -102,34 +117,67 @@ class _HomePageState extends State<HomePage> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          title: const Text('About QueryHub'),
+          title: Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  gradient: LinearGradient(
+                    colors: [
+                      Theme.of(context).colorScheme.primary,
+                      Theme.of(context).colorScheme.secondary,
+                    ],
+                  ),
+                ),
+                child: const Icon(
+                  Icons.hub_outlined,
+                  size: 20,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Text('About QueryHub'),
+            ],
+          ),
           content: const SingleChildScrollView(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'QueryHub is a document-grounded AI assistant. '
+                  'QueryHub is a RAG-powered document assistant. '
                   'Upload PDFs, DOCX, or text files, then ask questions. '
-                  'Answers are generated using a RAG (retrieval-augmented generation) backend.',
+                  'Answers are generated using retrieval-augmented generation.',
                 ),
-                SizedBox(height: 12),
+                SizedBox(height: 16),
                 Text(
-                  'How it works',
-                  style: TextStyle(fontWeight: FontWeight.bold),
+                  '🔍 How it works',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                 ),
-                SizedBox(height: 4),
+                SizedBox(height: 8),
                 Text(
-                  'Your documents are chunked, embedded, and indexed in a vector database. '
-                  'For each question, the most relevant chunks are retrieved and sent to the model as context.',
+                  '1. Documents are uploaded to cloud storage\n'
+                  '2. Text is extracted and chunked\n'
+                  '3. Embeddings are generated and indexed\n'
+                  '4. Questions retrieve relevant chunks\n'
+                  '5. AI generates answers from context',
+                  style: TextStyle(fontSize: 13),
                 ),
-                SizedBox(height: 12),
+                SizedBox(height: 16),
                 Text(
-                  'Privacy',
-                  style: TextStyle(fontWeight: FontWeight.bold),
+                  '🛠️ Technology Stack',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                 ),
-                SizedBox(height: 4),
+                SizedBox(height: 8),
                 Text(
-                  'Documents are used only for this local user. There is no multi-user account system yet.',
+                  '• Backend: FastAPI + Python\n'
+                  '• Storage: Supabase\n'
+                  '• Vector DB: Qdrant\n'
+                  '• AI: OpenRouter (Llama 3.3)\n'
+                  '• Frontend: Flutter',
+                  style: TextStyle(fontSize: 13),
                 ),
               ],
             ),
@@ -161,7 +209,7 @@ class _HomePageState extends State<HomePage> {
               final appAfterFrame = context.read<AppState>();
               if (appAfterFrame.sessions.isEmpty &&
                   appAfterFrame.hasReadyDocuments) {
-                appAfterFrame.createNewChat();
+                appAfterFrame.createNewChat(); // Async, but we don't need to await
               }
             }
           });
@@ -169,13 +217,15 @@ class _HomePageState extends State<HomePage> {
 
         return LayoutBuilder(
           builder: (context, constraints) {
-            final bool isWide = constraints.maxWidth >= 900;
+            final bool isWide = constraints.maxWidth >= 1024;
+            final bool isMedium = constraints.maxWidth >= 768 && constraints.maxWidth < 1024;
+            final bool isMobile = constraints.maxWidth < 768;
 
             final sidebar = Container(
-              width: isWide ? 320 : double.infinity,
+              width: isWide ? 320 : (isMedium ? 280 : double.infinity),
               decoration: BoxDecoration(
                 color: theme.colorScheme.surface.withOpacity(0.9),
-                borderRadius: isWide
+                borderRadius: (isWide || isMedium)
                     ? const BorderRadius.only(
                         topLeft: Radius.circular(18),
                         bottomLeft: Radius.circular(18),
@@ -226,138 +276,13 @@ class _HomePageState extends State<HomePage> {
                           ],
                         ),
                         const Spacer(),
-                        FilledButton.icon(
-                          onPressed:
-                              app.hasReadyDocuments ? app.createNewChat : null,
-                          icon:
-                              const Icon(Icons.add_comment_outlined, size: 18),
-                          label: const Text('New Chat'),
-                          style: FilledButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
-                            ),
-                          ),
-                        ),
                       ],
                     ),
                   ),
                   const Divider(height: 1),
-                  // Chat sessions
+                  // Documents section
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                    child: Text(
-                      'Chats',
-                      style: theme.textTheme.labelSmall!
-                          .copyWith(color: theme.hintColor),
-                    ),
-                  ),
-                  Expanded(
-                    child: ListView.builder(
-                      itemCount: app.sessions.length,
-                      itemBuilder: (context, index) {
-                        final chat = app.sessions[index];
-                        final isActive = app.activeSession?.id == chat.id;
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 2,
-                          ),
-                          child: Material(
-                            color: isActive
-                                ? theme.colorScheme.primary.withOpacity(0.08)
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(10),
-                            child: InkWell(
-                              borderRadius: BorderRadius.circular(10),
-                              onTap: () => app.selectChat(chat.id),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 6,
-                                ),
-                                child: Row(
-                                  children: [
-                                    Icon(
-                                      Icons.chat_bubble_outline,
-                                      size: 16,
-                                      color: isActive
-                                          ? theme.colorScheme.primary
-                                          : theme.hintColor,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            chat.title,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: theme.textTheme.bodyMedium!
-                                                .copyWith(
-                                              fontWeight: isActive
-                                                  ? FontWeight.w600
-                                                  : FontWeight.w400,
-                                            ),
-                                          ),
-                                          Text(
-                                            chat.humanCreatedAt,
-                                            style: theme.textTheme.bodySmall!
-                                                .copyWith(fontSize: 11),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(
-                                        Icons.delete_outline,
-                                        size: 18,
-                                      ),
-                                      color: theme.colorScheme.error,
-                                      tooltip: 'Delete chat',
-                                      onPressed: () async {
-                                        final confirm = await showDialog<bool>(
-                                          context: context,
-                                          builder: (ctx) => AlertDialog(
-                                            title: const Text('Delete chat?'),
-                                            content: const Text(
-                                              'This will remove this chat session and its messages from this device.',
-                                            ),
-                                            actions: [
-                                              TextButton(
-                                                onPressed: () =>
-                                                    Navigator.of(ctx)
-                                                        .pop(false),
-                                                child: const Text('Cancel'),
-                                              ),
-                                              FilledButton(
-                                                onPressed: () =>
-                                                    Navigator.of(ctx).pop(true),
-                                                child: const Text('Delete'),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                        if (confirm == true) {
-                                          app.deleteChat(chat.id);
-                                        }
-                                      },
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  const Divider(height: 1),
-                  // Documents
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 8, 4),
+                    padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
                     child: Row(
                       children: [
                         Text(
@@ -366,9 +291,23 @@ class _HomePageState extends State<HomePage> {
                               .copyWith(color: theme.hintColor),
                         ),
                         const Spacer(),
+                        if (app.hasProcessingDocuments)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  theme.colorScheme.primary,
+                                ),
+                              ),
+                            ),
+                          ),
                         FilledButton.tonalIcon(
-                          icon: const Icon(Icons.upload_file, size: 18),
-                          label: const Text('Upload'),
+                          icon: const Icon(Icons.add, size: 18),
+                          label: const Text('New'),
                           style: FilledButton.styleFrom(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 10,
@@ -380,84 +319,360 @@ class _HomePageState extends State<HomePage> {
                       ],
                     ),
                   ),
-                  SizedBox(
-                    height: 170,
-                    child: ListView.builder(
-                      padding: const EdgeInsets.only(
-                        left: 8,
-                        right: 8,
-                        bottom: 10,
-                      ),
-                      itemCount: app.documents.length,
-                      itemBuilder: (context, index) {
-                        final doc = app.documents[index];
-                        return Container(
-                          margin: const EdgeInsets.symmetric(
-                            horizontal: 4,
-                            vertical: 2,
-                          ),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.surfaceVariant
-                                .withOpacity(0.3),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.description_outlined, size: 16),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  doc.filename,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(fontSize: 12),
+                  // Documents list with nested chats (folder structure)
+                  Expanded(
+                    child: app.documents.isEmpty
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(16.0),
+                              child: Text(
+                                'No documents yet',
+                                style: TextStyle(
+                                  color: theme.hintColor,
+                                  fontSize: 12,
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              _DocumentStatusChip(status: doc.status),
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.delete_outline,
-                                  size: 18,
-                                ),
-                                color: theme.colorScheme.error,
-                                tooltip: 'Delete document',
-                                onPressed: () async {
-                                  final confirm = await showDialog<bool>(
-                                    context: context,
-                                    builder: (ctx) => AlertDialog(
-                                      title: const Text('Delete document?'),
-                                      content: const Text(
-                                        'This will remove the document and its index from the workspace.',
-                                      ),
-                                      actions: [
-                                        TextButton(
-                                          onPressed: () =>
-                                              Navigator.of(ctx).pop(false),
-                                          child: const Text('Cancel'),
-                                        ),
-                                        FilledButton(
-                                          onPressed: () =>
-                                              Navigator.of(ctx).pop(true),
-                                          child: const Text('Delete'),
-                                        ),
-                                      ],
+                            ),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.only(
+                              left: 8,
+                              right: 8,
+                              bottom: 8,
+                            ),
+                            itemCount: app.documents.length,
+                            itemBuilder: (context, index) {
+                              final doc = app.documents[index];
+                              final isExpanded = _expandedDocuments.contains(doc.id);
+                              final docChats = app.getSessionsForDocument(doc.id);
+                              final hasChats = docChats.isNotEmpty;
+                              
+                              return Column(
+                                children: [
+                                  // Document folder
+                                  Container(
+                                    margin: const EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                      vertical: 2,
                                     ),
-                                  );
-                                  if (confirm == true) {
-                                    await app.deleteDocument(doc.id);
-                                  }
-                                },
-                              ),
-                            ],
+                                    decoration: BoxDecoration(
+                                      color: theme.colorScheme.surfaceVariant
+                                          .withOpacity(0.3),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Material(
+                                      color: Colors.transparent,
+                                      child: InkWell(
+                                        borderRadius: BorderRadius.circular(10),
+                                        onTap: () {
+                                          setState(() {
+                                            if (isExpanded) {
+                                              _expandedDocuments.remove(doc.id);
+                                            } else {
+                                              _expandedDocuments.add(doc.id);
+                                              app.selectDocument(doc.id);
+                                            }
+                                          });
+                                        },
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 8,
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              // Expand/collapse icon
+                                              Icon(
+                                                isExpanded
+                                                    ? Icons.keyboard_arrow_down
+                                                    : Icons.keyboard_arrow_right,
+                                                size: 16,
+                                                color: theme.hintColor,
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Icon(
+                                                isExpanded
+                                                    ? Icons.folder_open
+                                                    : Icons.folder_outlined,
+                                                size: 18,
+                                                color: theme.colorScheme.primary,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      doc.filename,
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow.ellipsis,
+                                                      style: const TextStyle(
+                                                        fontSize: 12,
+                                                        fontWeight: FontWeight.w500,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 2),
+                                                    Row(
+                                                      children: [
+                                                        _DocumentStatusChip(
+                                                            status: doc.status),
+                                                        if (hasChats) ...[
+                                                          const SizedBox(width: 6),
+                                                          Icon(
+                                                            Icons.chat_bubble_outline,
+                                                            size: 10,
+                                                            color: theme.hintColor,
+                                                          ),
+                                                          const SizedBox(width: 2),
+                                                          Text(
+                                                            '${docChats.length}',
+                                                            style: theme.textTheme
+                                                                .bodySmall!
+                                                                .copyWith(
+                                                              fontSize: 10,
+                                                              color: theme.hintColor,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ],
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                              // New Chat button (only when expanded and ready)
+                                              if (isExpanded && doc.isReady)
+                                                IconButton(
+                                                  icon: const Icon(
+                                                    Icons.add_comment_outlined,
+                                                    size: 16,
+                                                  ),
+                                                  color: theme.colorScheme.primary,
+                                                  tooltip: 'New Chat',
+                                                  onPressed: () async {
+                                                    app.selectDocument(doc.id);
+                                                    await app.createNewChat();
+                                                    // Ensure folder stays expanded after creating chat
+                                                    setState(() {
+                                                      _expandedDocuments.add(doc.id);
+                                                    });
+                                                  },
+                                                ),
+                                              IconButton(
+                                                icon: const Icon(
+                                                  Icons.delete_outline,
+                                                  size: 16,
+                                                ),
+                                                color: theme.colorScheme.error,
+                                                tooltip: 'Delete document',
+                                                onPressed: () async {
+                                                  final confirm =
+                                                      await showDialog<bool>(
+                                                    context: context,
+                                                    builder: (ctx) => AlertDialog(
+                                                      title: const Text(
+                                                          'Delete document?'),
+                                                      content: Text(
+                                                        'This will remove the document and all ${docChats.length} chat session(s) from the workspace.',
+                                                      ),
+                                                      actions: [
+                                                        TextButton(
+                                                          onPressed: () =>
+                                                              Navigator.of(ctx)
+                                                                  .pop(false),
+                                                          child: const Text('Cancel'),
+                                                        ),
+                                                        FilledButton(
+                                                          onPressed: () =>
+                                                              Navigator.of(ctx)
+                                                                  .pop(true),
+                                                          child: const Text('Delete'),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  );
+                                                  if (confirm == true) {
+                                                    await app.deleteDocument(doc.id);
+                                                    setState(() {
+                                                      _expandedDocuments.remove(doc.id);
+                                                    });
+                                                    if (app.selectedDocumentId == doc.id) {
+                                                      app.selectDocument(null);
+                                                    }
+                                                  }
+                                                },
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  // Nested chats (shown when folder is expanded)
+                                  if (isExpanded) ...[
+                                    if (docChats.isEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          left: 32,
+                                          right: 8,
+                                          top: 4,
+                                          bottom: 4,
+                                        ),
+                                        child: Text(
+                                          'No chats yet',
+                                          style: TextStyle(
+                                            color: theme.hintColor,
+                                            fontSize: 11,
+                                            fontStyle: FontStyle.italic,
+                                          ),
+                                        ),
+                                      )
+                                    else
+                                      ...docChats.map((chat) {
+                                        final isActive =
+                                            app.activeSession?.id == chat.id;
+                                        return Padding(
+                                          padding: const EdgeInsets.only(
+                                            left: 28,
+                                            right: 4,
+                                            top: 2,
+                                            bottom: 2,
+                                          ),
+                                          child: Material(
+                                            color: isActive
+                                                ? theme.colorScheme.primary
+                                                    .withOpacity(0.08)
+                                                : Colors.transparent,
+                                            borderRadius: BorderRadius.circular(8),
+                                            child: InkWell(
+                                              borderRadius: BorderRadius.circular(8),
+                                              onTap: () {
+                                                app.selectDocument(doc.id);
+                                                app.selectChat(chat.id);
+                                              },
+                                              child: Padding(
+                                                padding: const EdgeInsets.symmetric(
+                                                  horizontal: 8,
+                                                  vertical: 6,
+                                                ),
+                                                child: Row(
+                                                  children: [
+                                                    Icon(
+                                                      Icons.chat_bubble_outline,
+                                                      size: 14,
+                                                      color: isActive
+                                                          ? theme.colorScheme.primary
+                                                          : theme.hintColor,
+                                                    ),
+                                                    const SizedBox(width: 8),
+                                                    Expanded(
+                                                      child: Column(
+                                                        crossAxisAlignment:
+                                                            CrossAxisAlignment.start,
+                                                        children: [
+                                                          Text(
+                                                            chat.title,
+                                                            maxLines: 1,
+                                                            overflow:
+                                                                TextOverflow.ellipsis,
+                                                            style: theme.textTheme
+                                                                .bodySmall!
+                                                                .copyWith(
+                                                              fontWeight: isActive
+                                                                  ? FontWeight.w600
+                                                                  : FontWeight.w400,
+                                                              fontSize: 12,
+                                                            ),
+                                                          ),
+                                                          const SizedBox(height: 2),
+                                                          Row(
+                                                            children: [
+                                                              if (chat.messageCount > 0) ...[
+                                                                Icon(
+                                                                  Icons.forum_outlined,
+                                                                  size: 9,
+                                                                  color: theme.hintColor,
+                                                                ),
+                                                                const SizedBox(width: 2),
+                                                                Text(
+                                                                  '${chat.messageCount}',
+                                                                  style: theme.textTheme
+                                                                      .bodySmall!
+                                                                      .copyWith(
+                                                                    fontSize: 9,
+                                                                    color: theme.hintColor,
+                                                                  ),
+                                                                ),
+                                                                const SizedBox(width: 6),
+                                                              ],
+                                                              Text(
+                                                                chat.humanUpdatedAt,
+                                                                style: theme.textTheme
+                                                                    .bodySmall!
+                                                                    .copyWith(
+                                                                  fontSize: 9,
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                    IconButton(
+                                                      icon: const Icon(
+                                                        Icons.delete_outline,
+                                                        size: 14,
+                                                      ),
+                                                      color: theme.colorScheme.error,
+                                                      tooltip: 'Delete chat',
+                                                      padding: EdgeInsets.zero,
+                                                      constraints: const BoxConstraints(
+                                                        minWidth: 24,
+                                                        minHeight: 24,
+                                                      ),
+                                                      onPressed: () async {
+                                                        final confirm =
+                                                            await showDialog<bool>(
+                                                          context: context,
+                                                          builder: (ctx) => AlertDialog(
+                                                            title: const Text(
+                                                                'Delete chat?'),
+                                                            content: const Text(
+                                                              'This will remove this chat session and its messages.',
+                                                            ),
+                                                            actions: [
+                                                              TextButton(
+                                                                onPressed: () =>
+                                                                    Navigator.of(ctx)
+                                                                        .pop(false),
+                                                                child: const Text('Cancel'),
+                                                              ),
+                                                              FilledButton(
+                                                                onPressed: () =>
+                                                                    Navigator.of(ctx)
+                                                                        .pop(true),
+                                                                child: const Text('Delete'),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        );
+                                                        if (confirm == true) {
+                                                          app.deleteChat(chat.id);
+                                                        }
+                                                      },
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        );
+                                      }).toList(),
+                                  ],
+                                ],
+                              );
+                            },
                           ),
-                        );
-                      },
-                    ),
                   ),
                 ],
               ),
@@ -525,20 +740,26 @@ class _HomePageState extends State<HomePage> {
                 ),
                 child: Center(
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 1400),
+                    constraints: BoxConstraints(
+                      maxWidth: isWide ? 1600 : double.infinity,
+                    ),
                     child: Padding(
-                      padding: const EdgeInsets.all(12.0),
-                      child: isWide
+                      padding: EdgeInsets.all(isMobile ? 8.0 : 12.0),
+                      child: (isWide || isMedium)
                           ? Row(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 sidebar,
-                                const SizedBox(width: 12),
+                                SizedBox(width: isMobile ? 8 : 12),
                                 Expanded(child: chatArea),
                               ],
                             )
                           : Column(
                               children: [
-                                sidebar,
+                                SizedBox(
+                                  height: 240,
+                                  child: sidebar,
+                                ),
                                 const SizedBox(height: 12),
                                 Expanded(child: chatArea),
                               ],
@@ -562,18 +783,98 @@ class _HomePageState extends State<HomePage> {
     final theme = Theme.of(context);
     if (!app.hasReadyDocuments) {
       return Center(
+        child: SingleChildScrollView(
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 500),
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  app.hasProcessingDocuments
+                      ? Icons.hourglass_empty
+                      : Icons.cloud_upload_outlined,
+                  size: 40,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                app.hasProcessingDocuments
+                    ? 'Processing documents...'
+                    : 'Upload documents to start',
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                app.hasProcessingDocuments
+                    ? 'Your documents are being indexed. This may take a few moments. You\'ll be able to ask questions once processing is complete.'
+                    : 'Upload PDFs, DOCX, or text files to get started. Once processed, you can ask questions about your documents.',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.hintColor,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              if (app.hasProcessingDocuments) ...[
+                const SizedBox(height: 24),
+                LinearProgressIndicator(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ] else ...[
+                const SizedBox(height: 32),
+                FilledButton.icon(
+                  onPressed: () => _pickAndUpload(app),
+                  icon: const Icon(Icons.upload_file),
+                  label: const Text('Upload Document'),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 16,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      );
+    }
+
+    // Show message based on state
+    if (app.selectedDocumentId == null) {
+      return Center(
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.upload_file, size: 48),
+            Icon(
+              Icons.folder_outlined,
+              size: 64,
+              color: theme.hintColor,
+            ),
             const SizedBox(height: 16),
-            const Text(
-              'Upload documents to start',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            Text(
+              'Select a document to view chats',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.hintColor,
+              ),
             ),
             const SizedBox(height: 8),
-            const Text(
-              'Once your documents are processed, you can start asking questions.',
+            Text(
+              'Click on a document in the sidebar to see its chat sessions',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.hintColor,
+              ),
               textAlign: TextAlign.center,
             ),
           ],
@@ -583,9 +884,30 @@ class _HomePageState extends State<HomePage> {
 
     if (active == null) {
       return Center(
-        child: Text(
-          'No active chat. Create a new chat from the sidebar.',
-          style: theme.textTheme.bodyMedium,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.chat_bubble_outline,
+              size: 64,
+              color: theme.hintColor,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No active chat',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.hintColor,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Create a new chat from the sidebar to start asking questions',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.hintColor,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
         ),
       );
     }
@@ -639,51 +961,146 @@ class _HomePageState extends State<HomePage> {
                       style: const TextStyle(fontSize: 14),
                     ),
                   ),
-                  if (msg.contexts.isNotEmpty && !isUser)
-                    TextButton(
+                  if (msg.contexts.isNotEmpty && !isUser) ...[
+                    const SizedBox(height: 8),
+                    TextButton.icon(
                       onPressed: () {
                         showModalBottomSheet(
                           context: context,
                           isScrollControlled: true,
+                          backgroundColor: Colors.transparent,
                           builder: (ctx) {
-                            return Padding(
-                              padding: const EdgeInsets.all(16.0),
-                              child: ListView.separated(
-                                itemCount: msg.contexts.length,
-                                separatorBuilder: (_, __) =>
-                                    const SizedBox(height: 12),
-                                itemBuilder: (ctx, i) {
-                                  final ctxChunk = msg.contexts[i];
-                                  return Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        'Score: ${ctxChunk.score.toStringAsFixed(3)}',
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
+                            return Container(
+                              height: MediaQuery.of(ctx).size.height * 0.7,
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.surface,
+                                borderRadius: const BorderRadius.vertical(
+                                  top: Radius.circular(20),
+                                ),
+                              ),
+                              child: Column(
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.all(16.0),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.source_outlined,
+                                          color: theme.colorScheme.primary,
                                         ),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        ctxChunk.text,
-                                        style: const TextStyle(
-                                          fontSize: 13,
+                                        const SizedBox(width: 12),
+                                        Text(
+                                          'Source Context (${msg.contexts.length})',
+                                          style: theme.textTheme.titleLarge
+                                              ?.copyWith(
+                                            fontWeight: FontWeight.bold,
+                                          ),
                                         ),
-                                      ),
-                                    ],
-                                  );
-                                },
+                                        const Spacer(),
+                                        IconButton(
+                                          icon: const Icon(Icons.close),
+                                          onPressed: () =>
+                                              Navigator.of(ctx).pop(),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const Divider(height: 1),
+                                  Expanded(
+                                    child: ListView.separated(
+                                      padding: const EdgeInsets.all(16.0),
+                                      itemCount: msg.contexts.length,
+                                      separatorBuilder: (_, __) =>
+                                          const SizedBox(height: 16),
+                                      itemBuilder: (ctx, i) {
+                                        final ctxChunk = msg.contexts[i];
+                                        return Container(
+                                          padding: const EdgeInsets.all(16),
+                                          decoration: BoxDecoration(
+                                            color: theme.colorScheme
+                                                .surfaceVariant
+                                                .withOpacity(0.5),
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                            border: Border.all(
+                                              color: theme.colorScheme.outline
+                                                  .withOpacity(0.2),
+                                            ),
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  Container(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 4,
+                                                    ),
+                                                    decoration: BoxDecoration(
+                                                      color: theme
+                                                          .colorScheme.primary
+                                                          .withOpacity(0.1),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              8),
+                                                    ),
+                                                    child: Text(
+                                                      'Relevance: ${(ctxChunk.score * 100).toStringAsFixed(1)}%',
+                                                      style: TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        fontSize: 12,
+                                                        color: theme.colorScheme
+                                                            .primary,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  const Spacer(),
+                                                  Text(
+                                                    'Chunk #${i + 1}',
+                                                    style: TextStyle(
+                                                      fontSize: 12,
+                                                      color: theme.hintColor,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 12),
+                                              Text(
+                                                ctxChunk.text,
+                                                style: const TextStyle(
+                                                  fontSize: 14,
+                                                  height: 1.5,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ],
                               ),
                             );
                           },
                         );
                       },
-                      child: const Text(
-                        'View sources',
-                        style: TextStyle(fontSize: 12),
+                      icon: const Icon(Icons.source_outlined, size: 14),
+                      label: Text(
+                        '${msg.contexts.length} sources',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
                       ),
                     ),
+                  ],
                 ],
               ),
             ),
@@ -779,29 +1196,82 @@ class _DocumentStatusChip extends StatelessWidget {
       case 'done':
         return Colors.green;
       case 'processing':
-      case 'uploading':
         return Colors.orange;
+      case 'uploading':
+        return Colors.blue;
       case 'failed':
         return Colors.red;
+      case 'uploaded':
+        return Colors.amber;
       default:
         return Theme.of(context).disabledColor;
+    }
+  }
+  
+  IconData _icon() {
+    switch (status) {
+      case 'done':
+        return Icons.check_circle;
+      case 'processing':
+        return Icons.hourglass_empty;
+      case 'uploading':
+        return Icons.cloud_upload;
+      case 'failed':
+        return Icons.error;
+      case 'uploaded':
+        return Icons.pending;
+      default:
+        return Icons.circle;
+    }
+  }
+  
+  String _displayText() {
+    switch (status) {
+      case 'done':
+        return 'Ready';
+      case 'processing':
+        return 'Processing';
+      case 'uploading':
+        return 'Uploading';
+      case 'failed':
+        return 'Failed';
+      case 'uploaded':
+        return 'Queued';
+      default:
+        return status;
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: _color(context).withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        status,
-        style: TextStyle(
-          fontSize: 10,
-          color: _color(context),
+        color: _color(context).withOpacity(0.15),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: _color(context).withOpacity(0.3),
+          width: 1,
         ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            _icon(),
+            size: 12,
+            color: _color(context),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            _displayText(),
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: _color(context),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -103,11 +103,19 @@ class ApiClient {
     }
   }
 
-  Future<(String, List<ContextChunk>)> askQuestion(String query) async {
+  Future<(String, List<ContextChunk>)> askQuestion(
+    String query, {
+    String? documentId,
+  }) async {
+    final body = <String, dynamic>{'query': query};
+    if (documentId != null) {
+      body['document_id'] = documentId;
+    }
+    
     final resp = await http.post(
       _uri('/ask'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'query': query}),
+      body: jsonEncode(body),
     );
     if (resp.statusCode != 200) {
       throw Exception('Ask failed: ${resp.statusCode} ${resp.body}');
@@ -125,6 +133,81 @@ class ApiClient {
       );
     }).toList();
     return (answer, contexts);
+  }
+
+  // ===== CHAT SESSION METHODS =====
+
+  Future<ChatSession> createChatSession({
+    required String title,
+    String? documentId,
+  }) async {
+    final resp = await http.post(
+      _uri('/chats'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'title': title,
+        if (documentId != null) 'document_id': documentId,
+      }),
+    );
+    if (resp.statusCode != 200) {
+      throw Exception('Create chat failed: ${resp.statusCode} ${resp.body}');
+    }
+    final data = jsonDecode(resp.body) as Map<String, dynamic>;
+    return ChatSession.fromJson(data);
+  }
+
+  Future<List<ChatSession>> fetchChatSessions({String? documentId}) async {
+    final uri = documentId != null
+        ? _uri('/chats?document_id=$documentId')
+        : _uri('/chats');
+    final resp = await http.get(uri);
+    if (resp.statusCode != 200) {
+      throw Exception('Fetch chats failed: ${resp.statusCode}');
+    }
+    final List<dynamic> jsonList = jsonDecode(resp.body) as List<dynamic>;
+    return jsonList
+        .map((j) => ChatSession.fromJson(j as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<Message>> fetchChatMessages(String sessionId) async {
+    final resp = await http.get(_uri('/chats/$sessionId/messages'));
+    if (resp.statusCode != 200) {
+      throw Exception('Fetch messages failed: ${resp.statusCode}');
+    }
+    final List<dynamic> jsonList = jsonDecode(resp.body) as List<dynamic>;
+    return jsonList
+        .map((j) => Message.fromJson(j as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<Message> addMessageToSession({
+    required String sessionId,
+    required String role,
+    required String content,
+    List<ContextChunk> contexts = const [],
+  }) async {
+    final resp = await http.post(
+      _uri('/chats/$sessionId/messages'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'role': role,
+        'content': content,
+        'contexts': contexts.map((c) => c.toJson()).toList(),
+      }),
+    );
+    if (resp.statusCode != 200) {
+      throw Exception('Add message failed: ${resp.statusCode} ${resp.body}');
+    }
+    final data = jsonDecode(resp.body) as Map<String, dynamic>;
+    return Message.fromJson(data);
+  }
+
+  Future<void> deleteChatSession(String sessionId) async {
+    final resp = await http.delete(_uri('/chats/$sessionId'));
+    if (resp.statusCode != 200 && resp.statusCode != 204) {
+      throw Exception('Delete chat failed: ${resp.statusCode} ${resp.body}');
+    }
   }
 }
 

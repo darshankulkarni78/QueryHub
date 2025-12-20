@@ -36,8 +36,25 @@ class Embedding(Base):
 class Job(Base):
     __tablename__ = "jobs"
     job_id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    document_id = Column(UUID(as_uuid=False), ForeignKey("documents.id"))
+    document_id = Column(UUID(as_uuid=False), ForeignKey("documents.id", ondelete="CASCADE"))
     status = Column(String, default="queued")  # queued / processing / done / failed
     progress = Column(Integer, default=0)
     error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class ChatSession(Base):
+    __tablename__ = "chat_sessions"
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    title = Column(String, nullable=False)
+    document_id = Column(UUID(as_uuid=False), ForeignKey("documents.id", ondelete="CASCADE"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+class Message(Base):
+    __tablename__ = "messages"
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    session_id = Column(UUID(as_uuid=False), ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False)
+    role = Column(String, nullable=False)  # 'user' or 'assistant'
+    content = Column(Text, nullable=False)
+    contexts = Column(Text, nullable=True)  # JSON string of context chunks
     created_at = Column(DateTime(timezone=True), server_default=func.now())

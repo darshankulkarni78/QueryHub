@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 env_path = Path(__file__).parent / ".env"
-load_dotenv(dotenv_path=env_path)
+load_dotenv(dotenv_path=env_path, override=True)
 
 def required_env(key: str) -> str:
 	"""Return the value of an environment variable or raise a clear error."""
@@ -12,8 +12,8 @@ def required_env(key: str) -> str:
 		raise RuntimeError(f"Required environment variable '{key}' is not set. Please add it to backend/.env or the environment.")
 	return val
 
-# OpenRouter
-OPENROUTER_API_KEY = required_env("OPENROUTER_API_KEY")
+# LLM Provider (Groq - free tier, reliable DNS)
+GROQ_API_KEY = required_env("GROQ_API_KEY")
 
 # Supabase storage
 SUPABASE_URL = required_env("SUPABASE_URL")

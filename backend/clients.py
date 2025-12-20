@@ -11,7 +11,8 @@ def get_qdrant():
         _qdrant = QdrantClient(
             url=QDRANT_URL,
             api_key=QDRANT_API_KEY,
-            prefer_grpc=False
+            prefer_grpc=False,
+            timeout=30.0  # 30 second timeout for slow connections
         )
     return _qdrant
 
@@ -26,3 +27,9 @@ def upload_file_to_supabase(local_path: str, filename: str):
     with open(local_path, "rb") as f:
         supabase.storage.from_(SUPABASE_BUCKET).upload(filename, f)
     return supabase.storage.from_(SUPABASE_BUCKET).get_public_url(filename)
+
+def delete_file_from_supabase(s3_key: str):
+    """Delete a file from Supabase storage"""
+    supabase = get_supabase()
+    # The s3_key is like "uploads/uuid_filename.pdf", but storage.remove expects just the path
+    supabase.storage.from_(SUPABASE_BUCKET).remove([s3_key])
